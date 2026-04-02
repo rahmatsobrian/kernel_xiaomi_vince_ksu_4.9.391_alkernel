@@ -1,0 +1,12 @@
+#
+# Timer Interrupt Frequency Configuration
+#
+
+
+
+config HZ
+	int "muh hz"
+	default 100
+
+config SCHED_HRTICK
+	def_bool HIGH_RES_TIMERS
