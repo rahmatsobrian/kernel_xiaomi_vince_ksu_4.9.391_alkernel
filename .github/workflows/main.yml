@@ -48,7 +48,7 @@ jobs:
       - name: Start Build (with log)
         run: |
           mkdir -p logs
-          bash build.sh 2>&1 | tee logs/build.txt
+          bash buildclang.sh 2>&1 | tee logs/build.txt
 
       - name: Upload Build Log
         if: always()
