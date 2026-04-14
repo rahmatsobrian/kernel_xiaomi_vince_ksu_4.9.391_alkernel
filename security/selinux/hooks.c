@@ -2099,18 +2099,21 @@ static inline u32 open_file_to_av(struct file *file)
 
 /* Hook functions begin here. */
 
-static int selinux_binder_set_context_mgr(const struct cred *mgr)
+static int selinux_binder_set_context_mgr(struct task_struct *mgr)
 {
-	return avc_has_perm(current_sid(), cred_sid(mgr), SECCLASS_BINDER,
+	u32 mysid = current_sid();
+	u32 mgrsid = task_sid(mgr);
+
+	return avc_has_perm(mysid, mgrsid, SECCLASS_BINDER,
 			    BINDER__SET_CONTEXT_MGR, NULL);
 }
 
-static int selinux_binder_transaction(const struct cred *from,
-				      const struct cred *to)
+static int selinux_binder_transaction(struct task_struct *from,
+				      struct task_struct *to)
 {
 	u32 mysid = current_sid();
-	u32 fromsid = cred_sid(from);
-	u32 tosid = cred_sid(to);
+	u32 fromsid = task_sid(from);
+	u32 tosid = task_sid(to);
 	int rc;
 
 	if (mysid != fromsid) {
@@ -2124,19 +2127,21 @@ static int selinux_binder_transaction(const struct cred *from,
 			    NULL);
 }
 
-static int selinux_binder_transfer_binder(const struct cred *from,
-					  const struct cred *to)
+static int selinux_binder_transfer_binder(struct task_struct *from,
+					  struct task_struct *to)
 {
-	return avc_has_perm(cred_sid(from), cred_sid(to),
-			    SECCLASS_BINDER, BINDER__TRANSFER,
+	u32 fromsid = task_sid(from);
+	u32 tosid = task_sid(to);
+
+	return avc_has_perm(fromsid, tosid, SECCLASS_BINDER, BINDER__TRANSFER,
 			    NULL);
 }
 
-static int selinux_binder_transfer_file(const struct cred *from,
-					const struct cred *to,
+static int selinux_binder_transfer_file(struct task_struct *from,
+					struct task_struct *to,
 					struct file *file)
 {
-	u32 sid = cred_sid(to);
+	u32 sid = task_sid(to);
 	struct file_security_struct *fsec = file->f_security;
 	struct dentry *dentry = file->f_path.dentry;
 	struct inode_security_struct *isec;
@@ -2321,6 +2326,7 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
 	int nnp = (bprm->unsafe & LSM_UNSAFE_NO_NEW_PRIVS);
 	int nosuid = !mnt_may_suid(bprm->file->f_path.mnt);
 	int rc;
+	u32 av;
 
 	if (!nnp && !nosuid)
 		return 0; /* neither NNP nor nosuid */
@@ -2329,24 +2335,40 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
 		return 0; /* No change in credentials */
 
 	/*
-	 * The only transitions we permit under NNP or nosuid
-	 * are transitions to bounded SIDs, i.e. SIDs that are
-	 * guaranteed to only be allowed a subset of the permissions
-	 * of the current SID.
+	 * If the policy enables the nnp_nosuid_transition policy capability,
+	 * then we permit transitions under NNP or nosuid if the
+	 * policy allows the corresponding permission between
+	 * the old and new contexts.
+	 */
+	if (selinux_policycap_nnp_nosuid_transition) {
+		av = 0;
+		if (nnp)
+			av |= PROCESS2__NNP_TRANSITION;
+		if (nosuid)
+			av |= PROCESS2__NOSUID_TRANSITION;
+		rc = avc_has_perm(old_tsec->sid, new_tsec->sid,
+				  SECCLASS_PROCESS2, av, NULL);
+		if (!rc)
+			return 0;
+	}
+
+	/*
+	 * We also permit NNP or nosuid transitions to bounded SIDs,
+	 * i.e. SIDs that are guaranteed to only be allowed a subset
+	 * of the permissions of the current SID.
 	 */
 	rc = security_bounded_transition(old_tsec->sid, new_tsec->sid);
-	if (rc) {
-		/*
-		 * On failure, preserve the errno values for NNP vs nosuid.
-		 * NNP:  Operation not permitted for caller.
-		 * nosuid:  Permission denied to file.
-		 */
-		if (nnp)
-			return -EPERM;
-		else
-			return -EACCES;
-	}
-	return 0;
+	if (!rc)
+		return 0;
+
+	/*
+	 * On failure, preserve the errno values for NNP vs nosuid.
+	 * NNP:  Operation not permitted for caller.
+	 * nosuid:  Permission denied to file.
+	 */
+	if (nnp)
+		return -EPERM;
+	return -EACCES;
 }
 
 static int selinux_bprm_set_creds(struct linux_binprm *bprm)
