@@ -2328,21 +2328,26 @@ static int check_nnp_nosuid(const struct linux_binprm *bprm,
 	if (new_tsec->sid == old_tsec->sid)
 		return 0; /* No change in credentials */
 
+	/*
+	 * The only transitions we permit under NNP or nosuid
+	 * are transitions to bounded SIDs, i.e. SIDs that are
+	 * guaranteed to only be allowed a subset of the permissions
+	 * of the current SID.
+	 */
 	rc = security_bounded_transition(old_tsec->sid, new_tsec->sid);
 	if (rc) {
 		/*
-		 * BYPASS KERNELSU / MAGISK (Fix SELinux Context Leak)
-		 * Alih-alih me-return error (-EPERM / -EACCES) yang membuat
-		 * transisi NNP KernelSU gagal dan bocor ke user-space,
-		 * kita paksa kernel untuk mengizinkannya (return 0).
-		 * Ini mereplika sifat bypass dari kernel lama (ZEROTWO)
-		 * tanpa memerlukan variabel yang sudah usang.
+		 * On failure, preserve the errno values for NNP vs nosuid.
+		 * NNP:  Operation not permitted for caller.
+		 * nosuid:  Permission denied to file.
 		 */
-		return 0; 
+		if (nnp)
+			return -EPERM;
+		else
+			return -EACCES;
 	}
 	return 0;
 }
-
 
 static int selinux_bprm_set_creds(struct linux_binprm *bprm)
 {
